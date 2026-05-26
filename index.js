@@ -368,6 +368,25 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // Queue shortcuts
+  const QUEUE_SHORTCUTS = {
+    '/queue/vip': 'VIP Response',
+    '/queue/120': 'Lead by Call - 120s',
+    '/queue/90': 'Lead by Call - 90s',
+    '/queue/ringbax': 'RingbaX'
+  };
+  if (QUEUE_SHORTCUTS[pathname]) {
+    try {
+      const result = await checkQueueAvailability(QUEUE_SHORTCUTS[pathname]);
+      res.writeHead(200);
+      return res.end(JSON.stringify(result));
+    } catch (err) {
+      console.error('Error:', err.message);
+      res.writeHead(500);
+      return res.end(JSON.stringify({ available: false, error: err.message }));
+    }
+  }
+
   // List all queues
   if (pathname === '/queues') {
     try {
