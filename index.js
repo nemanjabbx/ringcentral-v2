@@ -308,6 +308,53 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // Debug: raw presence status for all agents
+  if (pathname === '/agents/debug') {
+    const extensions = ['106', '107', '109', '110', '111', '113'];
+    try {
+      const token = await getAccessToken();
+      const results = await Promise.all(extensions.map(async (ext) => {
+        try {
+          const json = await new Promise((resolve, reject) => {
+            const options = {
+              hostname: 'platform.ringcentral.com',
+              path: `/restapi/v1.0/account/~/extension?extensionNumber=${ext}`,
+              method: 'GET',
+              headers: { 'Authorization': `Bearer ${token}` }
+            };
+            const req = https.request(options, (res) => {
+              let data = '';
+              res.on('data', chunk => data += chunk);
+              res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { resolve(null); } });
+            });
+            req.on('error', reject);
+            req.end();
+          });
+          const records = json && json.records || [];
+          if (!records.length) return { extension: ext, error: 'not found' };
+          const extId = records[0].id;
+          const extName = records[0].name;
+          const presence = await getPresence(token, extId);
+          return {
+            extension: ext,
+            name: extName,
+            presenceStatus: presence ? presence.presenceStatus : null,
+            dndStatus: presence ? presence.dndStatus : null,
+            telephonyStatus: presence ? presence.telephonyStatus : null,
+            userStatus: presence ? presence.userStatus : null
+          };
+        } catch(e) {
+          return { extension: ext, error: e.message };
+        }
+      }));
+      res.writeHead(200);
+      return res.end(JSON.stringify({ agents: results }));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   // All agents status: /agents
   if (pathname === '/agents') {
     const extsParam = url.searchParams.get('exts');
