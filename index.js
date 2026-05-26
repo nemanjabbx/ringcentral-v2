@@ -341,7 +341,8 @@ const server = http.createServer(async (req, res) => {
             presenceStatus: presence ? presence.presenceStatus : null,
             dndStatus: presence ? presence.dndStatus : null,
             telephonyStatus: presence ? presence.telephonyStatus : null,
-            userStatus: presence ? presence.userStatus : null
+            userStatus: presence ? presence.userStatus : null,
+            raw: presence
           };
         } catch(e) {
           return { extension: ext, error: e.message };
