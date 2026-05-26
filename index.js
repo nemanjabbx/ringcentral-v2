@@ -308,6 +308,48 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // All agents status: /agents
+  if (pathname === '/agents') {
+    const extsParam = url.searchParams.get('exts');
+    const extensions = extsParam
+      ? extsParam.split(',').map(e => e.trim())
+      : ['106', '107', '109', '110', '111', '113'];
+    try {
+      const results = await Promise.all(extensions.map(e => checkAgentByExtension(e).catch(err => ({ available: false, extension: e, error: err.message }))));
+      const available = results.filter(r => r.available);
+      res.writeHead(200);
+      return res.end(JSON.stringify({
+        available: available.length > 0,
+        available_count: available.length,
+        total: results.length,
+        agents: results
+      }));
+    } catch (err) {
+      console.error('Error:', err.message);
+      res.writeHead(500);
+      return res.end(JSON.stringify({ available: false, error: err.message }));
+    }
+  }
+
+  // Only available agents: /agents/available
+  if (pathname === '/agents/available') {
+    const extensions = ['106', '107', '109', '110', '111', '113'];
+    try {
+      const results = await Promise.all(extensions.map(e => checkAgentByExtension(e).catch(() => ({ available: false, extension: e }))));
+      const available = results.filter(r => r.available);
+      res.writeHead(200);
+      return res.end(JSON.stringify({
+        available: available.length > 0,
+        available_count: available.length,
+        agents: available
+      }));
+    } catch (err) {
+      console.error('Error:', err.message);
+      res.writeHead(500);
+      return res.end(JSON.stringify({ available: false, error: err.message }));
+    }
+  }
+
   // Agent check by extension: /agent?ext=106
   if (pathname === '/agent') {
     const ext = url.searchParams.get('ext');
