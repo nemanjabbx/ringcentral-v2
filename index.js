@@ -262,6 +262,21 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // List all queues
+  if (pathname === '/queues') {
+    try {
+      const token = await getAccessToken();
+      const queuesData = await getQueues(token);
+      const queues = (queuesData.records || []).map(q => ({ id: q.id, name: q.name }));
+      res.writeHead(200);
+      return res.end(JSON.stringify({ total: queues.length, queues }));
+    } catch (err) {
+      console.error('Error:', err.message);
+      res.writeHead(500);
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   res.writeHead(404);
   res.end(JSON.stringify({ error: 'Not found. Use /availability?state=TX or /queue?name=QueueName' }));
 });
