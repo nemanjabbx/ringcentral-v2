@@ -173,6 +173,52 @@ async function checkAvailability(stateUpper) {
   };
 }
 
+async function checkAgentByExtension(ext) {
+  const token = await getAccessToken();
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'platform.ringcentral.com',
+      path: `/restapi/v1.0/account/~/extension?extensionNumber=${ext}`,
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` }
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', async () => {
+        try {
+          const json = JSON.parse(data);
+          const records = json.records || [];
+          if (records.length === 0) {
+            return resolve({ available: false, error: `No extension found: ${ext}` });
+          }
+          const extId = records[0].id;
+          const extName = records[0].name;
+          const presence = await getPresence(token, extId);
+          if (!presence) return resolve({ available: false, extension: ext, name: extName });
+          const available = (
+            presence.presenceStatus === 'Available' &&
+            presence.dndStatus === 'TakeAllCalls' &&
+            presence.telephonyStatus === 'NoCall'
+          );
+          resolve({
+            available,
+            extension: ext,
+            name: extName,
+            presenceStatus: presence.presenceStatus,
+            dndStatus: presence.dndStatus,
+            telephonyStatus: presence.telephonyStatus
+          });
+        } catch(e) {
+          reject(new Error('Failed to parse extension response: ' + data));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 async function checkQueueAvailability(queueName) {
   const token = await getAccessToken();
   const queuesData = await getQueues(token);
@@ -253,6 +299,24 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const result = await checkQueueAvailability(name.trim());
+      res.writeHead(200);
+      return res.end(JSON.stringify(result));
+    } catch (err) {
+      console.error('Error:', err.message);
+      res.writeHead(500);
+      return res.end(JSON.stringify({ available: false, error: err.message }));
+    }
+  }
+
+  // Agent check by extension: /agent?ext=106
+  if (pathname === '/agent') {
+    const ext = url.searchParams.get('ext');
+    if (!ext) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ available: false, error: 'Missing ext parameter. Use ?ext=106' }));
+    }
+    try {
+      const result = await checkAgentByExtension(ext.trim());
       res.writeHead(200);
       return res.end(JSON.stringify(result));
     } catch (err) {
