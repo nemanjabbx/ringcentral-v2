@@ -535,8 +535,23 @@ async function warmupCache() {
     const token = await getAccessToken();
     const queuesData = await getQueuesCached(token);
     const queues = queuesData.records || [];
-    await Promise.all(queues.map(q => getQueueMembersCached(token, q.id).catch(() => null)));
-    console.log(`Cache warmed: ${queues.length} queues loaded`);
+
+    const allMembersData = await Promise.all(
+      queues.map(q => getQueueMembersCached(token, q.id).catch(() => null))
+    );
+
+    const uniqueExtIds = new Set();
+    allMembersData.forEach(md => {
+      if (md && md.records) md.records.forEach(m => uniqueExtIds.add(m.id));
+    });
+
+    // Fetch presence one by one with small delay to avoid rate limit during warmup
+    for (const extId of uniqueExtIds) {
+      await getPresenceCached(token, extId).catch(() => null);
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    console.log(`Cache warmed: ${queues.length} queues, ${uniqueExtIds.size} agents`);
   } catch (err) {
     console.error('Cache warmup failed:', err.message);
   }
