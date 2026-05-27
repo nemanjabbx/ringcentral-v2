@@ -8,6 +8,18 @@ const RC_JWT = process.env.RC_JWT;
 let tokenCache = null;
 let tokenExpiry = 0;
 
+const presenceCache = new Map();
+const PRESENCE_TTL = 30 * 1000; // 30 seconds
+
+async function getPresenceCached(token, extensionId) {
+  const now = Date.now();
+  const cached = presenceCache.get(extensionId);
+  if (cached && now < cached.expiry) return cached.data;
+  const data = await getPresence(token, extensionId);
+  presenceCache.set(extensionId, { data, expiry: now + PRESENCE_TTL });
+  return data;
+}
+
 const STATE_NAME_MAP = {
   'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
   'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware',
@@ -152,7 +164,7 @@ async function checkAvailability(stateUpper) {
   const members = membersData.records || [];
 
   const presenceResults = await Promise.all(
-    members.map(m => getPresence(token, m.id).catch(() => null))
+    members.map(m => getPresenceCached(token, m.id).catch(() => null))
   );
 
   const availableAgents = presenceResults.filter(p => {
@@ -194,7 +206,7 @@ async function checkAgentByExtension(ext) {
           }
           const extId = records[0].id;
           const extName = records[0].name;
-          const presence = await getPresence(token, extId);
+          const presence = await getPresenceCached(token, extId);
           if (!presence) return resolve({ available: false, extension: ext, name: extName });
           const available = (
             presence.presenceStatus === 'Available' &&
@@ -240,7 +252,7 @@ async function checkQueueAvailability(queueName) {
   const members = membersData.records || [];
 
   const presenceResults = await Promise.all(
-    members.map(m => getPresence(token, m.id).catch(() => null))
+    members.map(m => getPresenceCached(token, m.id).catch(() => null))
   );
 
   const availableAgents = presenceResults.filter(p => {
@@ -334,7 +346,7 @@ const server = http.createServer(async (req, res) => {
           if (!records.length) return { extension: ext, error: 'not found' };
           const extId = records[0].id;
           const extName = records[0].name;
-          const presence = await getPresence(token, extId);
+          const presence = await getPresenceCached(token, extId);
           return {
             extension: ext,
             name: extName,
@@ -477,7 +489,7 @@ const server = http.createServer(async (req, res) => {
       const membersData = await getQueueMembers(token, matchedQueue.id);
       const members = membersData.records || [];
       const withPresence = await Promise.all(members.map(async (m) => {
-        const presence = await getPresence(token, m.id).catch(() => null);
+        const presence = await getPresenceCached(token, m.id).catch(() => null);
         return {
           id: m.id,
           name: m.name,
