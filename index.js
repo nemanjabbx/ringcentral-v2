@@ -476,33 +476,6 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Token + raw queue members debug
-  if (pathname === '/token/debug') {
-    try {
-      const token = await getAccessToken();
-      const raw = await new Promise((resolve, reject) => {
-        const options = {
-          hostname: 'platform.ringcentral.com',
-          path: '/restapi/v1.0/account/~/call-queues/2429175010/members?perPage=200',
-          method: 'GET',
-          headers: { 'Authorization': `Bearer ${token}` }
-        };
-        const req = https.request(options, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { resolve({ raw: data }); } });
-        });
-        req.on('error', reject);
-        req.end();
-      });
-      res.writeHead(200);
-      return res.end(JSON.stringify({ token_prefix: token.substring(0, 20) + '...', queue_members_raw: raw }));
-    } catch (err) {
-      res.writeHead(500);
-      return res.end(JSON.stringify({ error: err.message }));
-    }
-  }
-
   // Debug queue members + their presence
   if (pathname === '/queue/members/debug') {
     const name = url.searchParams.get('name') || 'VIP Response';
