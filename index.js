@@ -11,12 +11,37 @@ let tokenExpiry = 0;
 const presenceCache = new Map();
 const PRESENCE_TTL = 30 * 1000; // 30 seconds
 
+const queueMembersCache = new Map();
+const QUEUE_MEMBERS_TTL = 5 * 60 * 1000; // 5 minutes (members rarely change)
+
+let queuesCache = null;
+let queuesCacheExpiry = 0;
+const QUEUES_TTL = 5 * 60 * 1000; // 5 minutes
+
 async function getPresenceCached(token, extensionId) {
   const now = Date.now();
   const cached = presenceCache.get(extensionId);
   if (cached && now < cached.expiry) return cached.data;
   const data = await getPresence(token, extensionId);
   presenceCache.set(extensionId, { data, expiry: now + PRESENCE_TTL });
+  return data;
+}
+
+async function getQueueMembersCached(token, queueId) {
+  const now = Date.now();
+  const cached = queueMembersCache.get(queueId);
+  if (cached && now < cached.expiry) return cached.data;
+  const data = await getQueueMembers(token, queueId);
+  queueMembersCache.set(queueId, { data, expiry: now + QUEUE_MEMBERS_TTL });
+  return data;
+}
+
+async function getQueuesCached(token) {
+  const now = Date.now();
+  if (queuesCache && now < queuesCacheExpiry) return queuesCache;
+  const data = await getQueues(token);
+  queuesCache = data;
+  queuesCacheExpiry = now + QUEUES_TTL;
   return data;
 }
 
@@ -147,7 +172,7 @@ async function getPresence(token, extensionId) {
 async function checkAvailability(stateUpper) {
   const stateName = STATE_NAME_MAP[stateUpper] || stateUpper;
   const token = await getAccessToken();
-  const queuesData = await getQueues(token);
+  const queuesData = await getQueuesCached(token);
   const queues = queuesData.records || [];
 
   const matchedQueue = queues.find(q =>
@@ -164,7 +189,7 @@ async function checkAvailability(stateUpper) {
     };
   }
 
-  const membersData = await getQueueMembers(token, matchedQueue.id);
+  const membersData = await getQueueMembersCached(token, matchedQueue.id);
   const members = membersData.records || [];
 
   const presenceResults = await Promise.all(
@@ -237,7 +262,7 @@ async function checkAgentByExtension(ext) {
 
 async function checkQueueAvailability(queueName) {
   const token = await getAccessToken();
-  const queuesData = await getQueues(token);
+  const queuesData = await getQueuesCached(token);
   const queues = queuesData.records || [];
 
   const matchedQueue = queues.find(q =>
@@ -252,7 +277,7 @@ async function checkQueueAvailability(queueName) {
     };
   }
 
-  const membersData = await getQueueMembers(token, matchedQueue.id);
+  const membersData = await getQueueMembersCached(token, matchedQueue.id);
   const members = membersData.records || [];
 
   const presenceResults = await Promise.all(
@@ -483,14 +508,14 @@ const server = http.createServer(async (req, res) => {
     const name = url.searchParams.get('name') || 'VIP Response';
     try {
       const token = await getAccessToken();
-      const queuesData = await getQueues(token);
+      const queuesData = await getQueuesCached(token);
       const queues = queuesData.records || [];
       const matchedQueue = queues.find(q => q.name.toLowerCase() === name.toLowerCase());
       if (!matchedQueue) {
         res.writeHead(200);
         return res.end(JSON.stringify({ error: `Queue not found: ${name}`, available_queues: queues.map(q => q.name) }));
       }
-      const membersData = await getQueueMembers(token, matchedQueue.id);
+      const membersData = await getQueueMembersCached(token, matchedQueue.id);
       const members = membersData.records || [];
       const withPresence = await Promise.all(members.map(async (m) => {
         const presence = await getPresenceCached(token, m.id).catch(() => null);
@@ -516,7 +541,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/queues') {
     try {
       const token = await getAccessToken();
-      const queuesData = await getQueues(token);
+      const queuesData = await getQueuesCached(token);
       const queues = (queuesData.records || []).map(q => ({ id: q.id, name: q.name }));
       res.writeHead(200);
       return res.end(JSON.stringify({ total: queues.length, queues }));
