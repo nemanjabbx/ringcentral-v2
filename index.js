@@ -12,7 +12,7 @@ const presenceCache = new Map();
 const PRESENCE_TTL = 30 * 1000; // 30 seconds
 
 const queueMembersCache = new Map();
-const QUEUE_MEMBERS_TTL = 5 * 60 * 1000; // 5 minutes (members rarely change)
+const QUEUE_MEMBERS_TTL = 30 * 60 * 1000; // 30 minutes (members rarely change)
 
 let queuesCache = null;
 let queuesCacheExpiry = 0;
@@ -529,5 +529,21 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Not found. Use /availability?state=TX or /queue?name=QueueName' }));
 });
 
+async function warmupCache() {
+  try {
+    console.log('Warming up cache...');
+    const token = await getAccessToken();
+    const queuesData = await getQueuesCached(token);
+    const queues = queuesData.records || [];
+    await Promise.all(queues.map(q => getQueueMembersCached(token, q.id).catch(() => null)));
+    console.log(`Cache warmed: ${queues.length} queues loaded`);
+  } catch (err) {
+    console.error('Cache warmup failed:', err.message);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Availability API running on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`Availability API running on port ${PORT}`);
+  warmupCache();
+});
