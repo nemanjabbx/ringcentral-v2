@@ -110,7 +110,11 @@ async function getQueueMembers(token, queueId) {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
+        try {
+          const json = JSON.parse(data);
+          if (json.errorCode) reject(new Error(`RC error ${json.errorCode}: ${json.message}`));
+          else resolve(json);
+        }
         catch(e) { reject(new Error('Failed to parse members: ' + data)); }
       });
     });
