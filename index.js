@@ -22,27 +22,42 @@ async function getPresenceCached(token, extensionId) {
   const now = Date.now();
   const cached = presenceCache.get(extensionId);
   if (cached && now < cached.expiry) return cached.data;
-  const data = await getPresence(token, extensionId);
-  presenceCache.set(extensionId, { data, expiry: now + PRESENCE_TTL });
-  return data;
+  try {
+    const data = await getPresence(token, extensionId);
+    presenceCache.set(extensionId, { data, expiry: now + PRESENCE_TTL });
+    return data;
+  } catch (err) {
+    if (cached) return cached.data; // return stale cache on rate limit
+    throw err;
+  }
 }
 
 async function getQueueMembersCached(token, queueId) {
   const now = Date.now();
   const cached = queueMembersCache.get(queueId);
   if (cached && now < cached.expiry) return cached.data;
-  const data = await getQueueMembers(token, queueId);
-  queueMembersCache.set(queueId, { data, expiry: now + QUEUE_MEMBERS_TTL });
-  return data;
+  try {
+    const data = await getQueueMembers(token, queueId);
+    queueMembersCache.set(queueId, { data, expiry: now + QUEUE_MEMBERS_TTL });
+    return data;
+  } catch (err) {
+    if (cached) return cached.data; // return stale cache on rate limit
+    throw err;
+  }
 }
 
 async function getQueuesCached(token) {
   const now = Date.now();
   if (queuesCache && now < queuesCacheExpiry) return queuesCache;
-  const data = await getQueues(token);
-  queuesCache = data;
-  queuesCacheExpiry = now + QUEUES_TTL;
-  return data;
+  try {
+    const data = await getQueues(token);
+    queuesCache = data;
+    queuesCacheExpiry = now + QUEUES_TTL;
+    return data;
+  } catch (err) {
+    if (queuesCache) return queuesCache; // return stale cache on rate limit
+    throw err;
+  }
 }
 
 const STATE_NAME_MAP = {
