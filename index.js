@@ -435,6 +435,40 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // Debug queue members + their presence
+  if (pathname === '/queue/members/debug') {
+    const name = url.searchParams.get('name') || 'VIP Response';
+    try {
+      const token = await getAccessToken();
+      const queuesData = await getQueues(token);
+      const queues = queuesData.records || [];
+      const matchedQueue = queues.find(q => q.name.toLowerCase() === name.toLowerCase());
+      if (!matchedQueue) {
+        res.writeHead(200);
+        return res.end(JSON.stringify({ error: `Queue not found: ${name}`, available_queues: queues.map(q => q.name) }));
+      }
+      const membersData = await getQueueMembers(token, matchedQueue.id);
+      const members = membersData.records || [];
+      const withPresence = await Promise.all(members.map(async (m) => {
+        const presence = await getPresence(token, m.id).catch(() => null);
+        return {
+          id: m.id,
+          name: m.name,
+          extensionNumber: m.extensionNumber,
+          presenceStatus: presence ? presence.presenceStatus : null,
+          dndStatus: presence ? presence.dndStatus : null,
+          telephonyStatus: presence ? presence.telephonyStatus : null,
+          raw: presence
+        };
+      }));
+      res.writeHead(200);
+      return res.end(JSON.stringify({ queue: matchedQueue.name, total_members: members.length, members: withPresence }));
+    } catch (err) {
+      res.writeHead(500);
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   // List all queues
   if (pathname === '/queues') {
     try {
