@@ -138,6 +138,45 @@ async function getQueues(token) {
   });
 }
 
+async function getExtensions(token) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'platform.ringcentral.com',
+      path: '/restapi/v1.0/account/~/extension?perPage=200&type=User&status=Enabled',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` }
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch(e) { reject(new Error('Failed to parse extensions: ' + data)); }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+let extensionsCache = null;
+let extensionsCacheExpiry = 0;
+const EXTENSIONS_TTL = 10 * 60 * 1000; // 10 minutes
+
+async function getExtensionsCached(token) {
+  const now = Date.now();
+  if (extensionsCache && now < extensionsCacheExpiry) return extensionsCache;
+  try {
+    const data = await getExtensions(token);
+    extensionsCache = data;
+    extensionsCacheExpiry = now + EXTENSIONS_TTL;
+    return data;
+  } catch (err) {
+    if (extensionsCache) return extensionsCache;
+    throw err;
+  }
+}
+
 async function getQueueMembers(token, queueId) {
   return new Promise((resolve, reject) => {
     const options = {
@@ -366,9 +405,10 @@ const server = http.createServer(async (req, res) => {
 
   // Debug: raw presence status for all agents
   if (pathname === '/agents/debug') {
-    const extensions = ['106', '107', '109', '110', '111', '113'];
     try {
       const token = await getAccessToken();
+      const extData = await getExtensionsCached(token);
+      const extensions = (extData.records || []).map(e => e.extensionNumber);
       const results = await Promise.all(extensions.map(async (ext) => {
         try {
           const json = await new Promise((resolve, reject) => {
@@ -414,11 +454,16 @@ const server = http.createServer(async (req, res) => {
 
   // All agents status: /agents
   if (pathname === '/agents') {
-    const extsParam = url.searchParams.get('exts');
-    const extensions = extsParam
-      ? extsParam.split(',').map(e => e.trim())
-      : ['106', '107', '109', '110', '111', '113'];
     try {
+      const token = await getAccessToken();
+      const extsParam = url.searchParams.get('exts');
+      let extensions;
+      if (extsParam) {
+        extensions = extsParam.split(',').map(e => e.trim());
+      } else {
+        const extData = await getExtensionsCached(token);
+        extensions = (extData.records || []).map(e => e.extensionNumber);
+      }
       const results = await Promise.all(extensions.map(e => checkAgentByExtension(e).catch(err => ({ available: false, extension: e, error: err.message }))));
       const available = results.filter(r => r.available);
       res.writeHead(200);
@@ -437,8 +482,10 @@ const server = http.createServer(async (req, res) => {
 
   // Only available agents: /agents/available
   if (pathname === '/agents/available') {
-    const extensions = ['106', '107', '109', '110', '111', '113'];
     try {
+      const token = await getAccessToken();
+      const extData = await getExtensionsCached(token);
+      const extensions = (extData.records || []).map(e => e.extensionNumber);
       const results = await Promise.all(extensions.map(e => checkAgentByExtension(e).catch(() => ({ available: false, extension: e }))));
       const available = results.filter(r => r.available);
       res.writeHead(200);
