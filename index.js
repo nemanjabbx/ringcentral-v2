@@ -1,5 +1,11 @@
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
+
+const WEBHOOK_URL = process.env.WEBHOOK_URL || null;
+const WEBHOOK_VERIFICATION_TOKEN = process.env.WEBHOOK_VERIFICATION_TOKEN || 'rc-webhook-verify-token';
+let webhookSubscriptionId = null;
+let webhookRenewalTimer = null;
 
 const RC_CLIENT_ID = process.env.RC_CLIENT_ID;
 const RC_CLIENT_SECRET = process.env.RC_CLIENT_SECRET;
@@ -587,6 +593,23 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // RC Webhook receiver
+  if (pathname === '/webhook/presence' && req.method === 'POST') {
+    const validationToken = req.headers['validation-token'];
+    if (validationToken) {
+      res.writeHead(200, { 'Validation-Token': validationToken });
+      return res.end();
+    }
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      handleWebhookPresence(body);
+      res.writeHead(200);
+      res.end();
+    });
+    return;
+  }
+
   res.writeHead(404);
   res.end(JSON.stringify({ error: 'Not found. Use /availability?state=TX or /queue?name=QueueName' }));
 });
@@ -619,8 +642,99 @@ async function warmupCache() {
   }
 }
 
+async function createWebhookSubscription(token) {
+  if (!WEBHOOK_URL) {
+    console.log('WEBHOOK_URL not set, skipping webhook subscription');
+    return;
+  }
+  return new Promise((resolve) => {
+    const body = JSON.stringify({
+      eventFilters: [
+        '/restapi/v1.0/account/~/extension/~/presence?detailedTelephonyState=true'
+      ],
+      deliveryMode: {
+        transportType: 'WebHook',
+        address: `${WEBHOOK_URL}/webhook/presence`,
+        verificationToken: WEBHOOK_VERIFICATION_TOKEN
+      },
+      expiresIn: 86400
+    });
+    const options = {
+      hostname: 'platform.ringcentral.com',
+      path: '/restapi/v1.0/subscription',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.id) {
+            webhookSubscriptionId = json.id;
+            console.log(`RC webhook subscription created: ${json.id}`);
+            scheduleWebhookRenewal();
+            resolve(json);
+          } else {
+            console.error('Webhook subscription failed:', data);
+            resolve(null);
+          }
+        } catch(e) { resolve(null); }
+      });
+    });
+    req.on('error', (err) => { console.error('Webhook subscription error:', err.message); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
+
+function scheduleWebhookRenewal() {
+  if (webhookRenewalTimer) clearTimeout(webhookRenewalTimer);
+  webhookRenewalTimer = setTimeout(async () => {
+    try {
+      console.log('Renewing RC webhook subscription...');
+      const token = await getAccessToken();
+      await createWebhookSubscription(token);
+    } catch(err) {
+      console.error('Webhook renewal failed:', err.message);
+    }
+  }, 23 * 60 * 60 * 1000);
+}
+
+function handleWebhookPresence(body) {
+  try {
+    const data = JSON.parse(body);
+    const presence = data.body || data;
+    const extensionId = presence.extensionId ||
+      (presence.extension && presence.extension.id) ||
+      (data.body && data.body.extension && data.body.extension.id);
+    if (!extensionId) {
+      console.log('Webhook: no extensionId found in payload:', JSON.stringify(data).slice(0, 200));
+      return;
+    }
+    presenceCache.set(String(extensionId), {
+      data: presence,
+      expiry: Date.now() + (60 * 1000)
+    });
+    console.log(`Webhook: updated presence for ext ${extensionId} → ${presence.presenceStatus} / ${presence.telephonyStatus}`);
+  } catch(e) {
+    console.error('Webhook parse error:', e.message);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Availability API running on port ${PORT}`);
-  warmupCache();
+  await warmupCache();
+  try {
+    const token = await getAccessToken();
+    await createWebhookSubscription(token);
+  } catch(err) {
+    console.error('Failed to create webhook subscription:', err.message);
+  }
 });
