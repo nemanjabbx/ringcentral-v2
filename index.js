@@ -594,15 +594,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   // RC Webhook receiver
-  if (pathname === '/webhook/presence' && req.method === 'POST') {
+  if (pathname === '/webhook/presence') {
     const validationToken = req.headers['validation-token'];
     if (validationToken) {
+      console.log('Webhook: validation request received');
       res.writeHead(200, { 'Validation-Token': validationToken });
       return res.end();
     }
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
+      console.log('Webhook: incoming payload:', body.slice(0, 300));
       handleWebhookPresence(body);
       res.writeHead(200);
       res.end();
