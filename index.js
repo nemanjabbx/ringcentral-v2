@@ -14,8 +14,34 @@ const RC_JWT = process.env.RC_JWT;
 let tokenCache = null;
 let tokenExpiry = 0;
 
+// --- RC API Rate Limiter (max 5 concurrent requests) ---
+let rcActiveRequests = 0;
+const RC_MAX_CONCURRENT = 5;
+const rcQueue = [];
+
+function rcThrottle(fn) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      rcActiveRequests++;
+      fn().then(result => {
+        resolve(result);
+      }).catch(err => {
+        reject(err);
+      }).finally(() => {
+        rcActiveRequests--;
+        if (rcQueue.length > 0) rcQueue.shift()();
+      });
+    };
+    if (rcActiveRequests < RC_MAX_CONCURRENT) {
+      run();
+    } else {
+      rcQueue.push(run);
+    }
+  });
+}
+
 const presenceCache = new Map();
-const PRESENCE_TTL = 30 * 1000; // 30 seconds
+const PRESENCE_TTL = 15 * 1000; // 15 seconds (webhook updates instantly, this is fallback)
 
 const queueMembersCache = new Map();
 const QUEUE_MEMBERS_TTL = 30 * 60 * 1000; // 30 minutes (members rarely change)
@@ -26,14 +52,14 @@ const QUEUES_TTL = 5 * 60 * 1000; // 5 minutes
 
 async function getPresenceCached(token, extensionId) {
   const now = Date.now();
-  const cached = presenceCache.get(extensionId);
+  const cached = presenceCache.get(String(extensionId));
   if (cached && now < cached.expiry) return cached.data;
   try {
-    const data = await getPresence(token, extensionId);
-    presenceCache.set(extensionId, { data, expiry: now + PRESENCE_TTL });
+    const data = await rcThrottle(() => getPresence(token, extensionId));
+    if (data) presenceCache.set(String(extensionId), { data, expiry: now + PRESENCE_TTL });
     return data;
   } catch (err) {
-    if (cached) return cached.data; // return stale cache on rate limit
+    if (cached) return cached.data;
     throw err;
   }
 }
@@ -229,14 +255,15 @@ async function getPresence(token, extensionId) {
   });
 }
 
-async function checkAvailability(stateUpper) {
+async function checkAvailability(stateUpper, office) {
   const stateName = STATE_NAME_MAP[stateUpper] || stateUpper;
+  const queueName = office ? `${stateName} - ${office}` : stateName;
   const token = await getAccessToken();
   const queuesData = await getQueuesCached(token);
   const queues = queuesData.records || [];
 
   const matchedQueue = queues.find(q =>
-    q.name.toLowerCase() === stateName.toLowerCase()
+    q.name.toLowerCase() === queueName.toLowerCase()
   );
 
   if (!matchedQueue) {
@@ -245,7 +272,8 @@ async function checkAvailability(stateUpper) {
       agents: 0,
       state: stateUpper,
       state_name: stateName,
-      reason: `No queue found for: ${stateName}`
+      office: office || 'main',
+      reason: `No queue found for: ${queueName}`
     };
   }
 
@@ -269,6 +297,8 @@ async function checkAvailability(stateUpper) {
     available: availableAgents.length > 0,
     agents: availableAgents.length,
     state: stateUpper,
+    state_name: stateName,
+    office: office || 'main',
     queue: matchedQueue.name,
     total_members: members.length
   };
@@ -353,12 +383,26 @@ async function checkQueueAvailability(queueName) {
     );
   });
 
+  const activeCalls = presenceResults.filter(p => {
+    if (!p) return false;
+    return p.telephonyStatus === 'CallConnected' || p.telephonyStatus === 'OnHold' || p.telephonyStatus === 'Ringing';
+  }).length;
+
   return {
     available: availableAgents.length > 0,
     agents: availableAgents.length,
+    active_calls: activeCalls,
     queue: matchedQueue.name,
     total_members: members.length
   };
+}
+
+async function checkAvailabilityWithMinAgents(stateUpper, office, minAgents) {
+  const result = await checkAvailability(stateUpper, office);
+  if (minAgents && result.agents < minAgents) {
+    return { ...result, available: false, reason: `Not enough agents: ${result.agents} available, ${minAgents} required` };
+  }
+  return result;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -380,8 +424,11 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(400);
       return res.end(JSON.stringify({ available: false, error: 'Missing state parameter. Use ?state=TX' }));
     }
+    const office = url.searchParams.get('office') ? url.searchParams.get('office').trim() : null;
+    const minAgentsParam = url.searchParams.get('min_agents');
+    const minAgents = minAgentsParam ? parseInt(minAgentsParam, 10) : null;
     try {
-      const result = await checkAvailability(state.toUpperCase().trim());
+      const result = await checkAvailabilityWithMinAgents(state.toUpperCase().trim(), office, minAgents);
       res.writeHead(200);
       return res.end(JSON.stringify(result));
     } catch (err) {
